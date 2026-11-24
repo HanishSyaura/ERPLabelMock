@@ -1,0 +1,1544 @@
+// Label printing Manufacturing ERP - Phase 1 foundation.
+// Business tables (BOM, Planning, Shopfloor, QC) are added phase by phase;
+// see docs/DATABASE_DESIGN.md.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Char(36)
+  /// Sign-in name. Operators usually sign in with their employee number.
+  username           String     @unique @db.VarChar(50)
+  fullName           String     @map("full_name") @db.VarChar(120)
+  email              String?    @unique @db.VarChar(191)
+  employeeNo         String?    @unique @map("employee_no") @db.VarChar(30)
+  passwordHash       String     @map("password_hash") @db.VarChar(255)
+  status             UserStatus @default(ACTIVE)
+  mustChangePassword Boolean    @default(false) @map("must_change_password")
+  failedLogins       Int        @default(0) @map("failed_logins")
+  lockedUntil        DateTime?  @map("locked_until") @db.DateTime(3)
+  lastLoginAt        DateTime?  @map("last_login_at") @db.DateTime(3)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById        String?    @map("created_by") @db.Char(36)
+  updatedById        String?    @map("updated_by") @db.Char(36)
+
+  roles    UserRole[]
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Char(36)
+  /// Immutable key. System roles are the suggested templates from the brief.
+  code        String   @unique @db.VarChar(40)
+  name        String   @unique @db.VarChar(80)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false) @map("is_system")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?  @map("created_by") @db.Char(36)
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+/// Mirror of the permission catalog in code (src/modules/access/catalog.ts),
+/// synced by the seed so role grants have real foreign keys.
+model Permission {
+  key         String  @id @db.VarChar(80)
+  module      String  @db.VarChar(30)
+  area        String  @db.VarChar(60)
+  description String  @db.VarChar(255)
+  sortOrder   Int     @map("sort_order")
+  isActive    Boolean @default(true) @map("is_active")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId        String     @map("role_id") @db.Char(36)
+  permissionKey String     @map("permission_key") @db.VarChar(80)
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+
+  @@id([roleId, permissionKey])
+  @@index([permissionKey])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Char(36)
+  roleId String @map("role_id") @db.Char(36)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// Server-side session. The cookie holds a random token; only its SHA-256 is stored.
+model Session {
+  id         String    @id @db.Char(64)
+  userId     String    @map("user_id") @db.Char(36)
+  csrfToken  String    @map("csrf_token") @db.Char(64)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.DateTime(3)
+  expiresAt  DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt  DateTime? @map("revoked_at") @db.DateTime(3)
+  ip         String?   @db.VarChar(64)
+  userAgent  String?   @map("user_agent") @db.VarChar(255)
+  /// Handheld device identifier sent by the scanner UI (X-Device-Id), when present.
+  deviceId   String?   @map("device_id") @db.VarChar(80)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Append-only: UPDATE and DELETE are blocked by database triggers.
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.DateTime(3)
+  userId     String?  @map("user_id") @db.Char(36)
+  /// Snapshot so the trail stays readable if the user is renamed.
+  userName   String?  @map("user_name") @db.VarChar(120)
+  module     String   @db.VarChar(30)
+  action     String   @db.VarChar(60)
+  entityType String   @map("entity_type") @db.VarChar(60)
+  entityId   String?  @map("entity_id") @db.VarChar(64)
+  /// Human reference (document number, code, username).
+  recordRef  String?  @map("record_ref") @db.VarChar(120)
+  previous   Json?
+  next       Json?
+  remarks    String?  @db.Text
+  result     String   @default("SUCCESS") @db.VarChar(20)
+  deviceId   String?  @map("device_id") @db.VarChar(80)
+  ip         String?  @db.VarChar(64)
+  requestId  String?  @map("request_id") @db.VarChar(64)
+
+  @@index([occurredAt])
+  @@index([module, occurredAt])
+  @@index([entityType, entityId])
+  @@index([userId, occurredAt])
+  @@map("audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 - BOM (Father Code -> Son Codes)
+// ---------------------------------------------------------------------------
+
+enum BomStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SonCodeStatus {
+  ACTIVE
+  REMOVED
+}
+
+/// Uploaded file metadata. Bytes live in UPLOAD_DIR under `storage_key`.
+model StoredFile {
+  id           String     @id @default(uuid()) @db.Char(36)
+  purpose      String     @db.VarChar(20)
+  originalName String     @map("original_name") @db.VarChar(255)
+  extension    String     @db.VarChar(10)
+  mimeType     String     @map("mime_type") @db.VarChar(100)
+  sizeBytes    Int        @map("size_bytes")
+  sha256       String     @db.Char(64)
+  storageKey   String     @unique @map("storage_key") @db.VarChar(100)
+  thumbnailKey String?    @map("thumbnail_key") @db.VarChar(100)
+  /// image | pdf | none - how the UI can preview it.
+  previewKind  String     @map("preview_kind") @db.VarChar(10)
+  uploadedById String     @map("uploaded_by") @db.Char(36)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  /// Set when the file becomes part of an artwork revision (unattached uploads are purged).
+  attachedAt   DateTime?  @map("attached_at") @db.DateTime(3)
+  partImages   Material[] @relation("PartImage")
+
+  artworkRevisions BomArtworkRevision[]
+
+  @@index([sha256])
+  @@index([originalName])
+  @@index([attachedAt, createdAt])
+  @@map("stored_files")
+}
+
+/// Material / component reference list used to fill Son Codes.
+/// Minimal on purpose (no specifications, costing or stock).
+/// Label-industry kind of a Part Category; decides which spec fields a part shows.
+enum PartKind {
+  LABEL_STOCK
+  FILM
+  PAPER
+  LAMINATE
+  ADHESIVE
+  INK
+  VARNISH
+  FOIL
+  RIBBON
+  CORE
+  PLATE
+  PACKAGING
+  OTHER
+}
+
+/// What kind of item a part is. Finished goods carry an Artwork No. (Father Code).
+enum PartType {
+  RAW_MATERIAL
+  FINISHED_GOOD
+  SEMI_FINISHED
+  PACKAGING
+  CONSUMABLE
+}
+
+enum StockForm {
+  ROLL
+  SHEET
+  FANFOLD
+  UNIT
+}
+
+/// Part Category Master (e.g. Label stock, Ink, Hot foil). Code immutable.
+model PartCategory {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(20)
+  name        String       @unique @db.VarChar(60)
+  kind        PartKind     @default(OTHER)
+  description String?      @db.VarChar(255)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+
+  groups    PartGroup[]
+  parts     Material[]
+  templates InspectionTemplate[]
+
+  @@map("part_categories")
+}
+
+/// Part Group Master: a group within one category (e.g. "PP white gloss" under Label stock).
+model PartGroup {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(20)
+  name        String       @db.VarChar(60)
+  categoryId  String       @map("category_id") @db.Char(36)
+  description String?      @db.VarChar(255)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+  category    PartCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  parts Material[]
+
+  @@unique([categoryId, name])
+  @@map("part_groups")
+}
+
+/// Part Master (table "materials"; Son Codes and the MRS refer to it).
+/// Spec fields are optional; which ones apply depends on the category kind.
+model Material {
+  id               String              @id @default(uuid()) @db.Char(36)
+  /// Immutable.
+  code             String              @unique @db.VarChar(40)
+  description      String              @db.VarChar(255)
+  uom              String              @db.VarChar(10)
+  partType         PartType            @default(RAW_MATERIAL) @map("part_type")
+  /// Artwork No.: the Father Code of a finished-good part (one per part).
+  bomId            String?             @unique @map("bom_id") @db.Char(36)
+  /// NMI No.: same number on the Part Master and its Master Card.
+  nmiNo            String?             @unique @map("nmi_no") @db.VarChar(40)
+  /// Free-text specification line as in TBS.
+  specification    String?             @db.VarChar(1000)
+  /// e.g. Purchased, Manufactured, Customer supplied, Local, Import.
+  source           String?             @db.VarChar(40)
+  /// Part revision: raised when description, specification, unit or engineering data change.
+  revisionNo       Int                 @default(0) @map("revision_no")
+  revisedAt        DateTime?           @map("revised_at") @db.DateTime(3)
+  // Engineering
+  pcsPerRoll       Decimal?            @map("pcs_per_roll") @db.Decimal(18, 4)
+  packQty          Decimal?            @map("pack_qty") @db.Decimal(18, 4)
+  cartonsPerPallet Int?                @map("cartons_per_pallet")
+  materialType     String?             @map("material_type") @db.VarChar(60)
+  measureHMm       Decimal?            @map("measure_h_mm") @db.Decimal(10, 2)
+  measureWMm       Decimal?            @map("measure_w_mm") @db.Decimal(10, 2)
+  measureLMm       Decimal?            @map("measure_l_mm") @db.Decimal(10, 2)
+  decisionCost     Decimal?            @map("decision_cost") @db.Decimal(18, 4)
+  tariffCode       String?             @map("tariff_code") @db.VarChar(30)
+  // Shipping (manual until the WMS / purchasing integration)
+  reorderLevel     Decimal?            @map("reorder_level") @db.Decimal(18, 4)
+  reorderQty       Decimal?            @map("reorder_qty") @db.Decimal(18, 4)
+  maxQty           Decimal?            @map("max_qty") @db.Decimal(18, 4)
+  leadTimeDays     Int?                @map("lead_time_days")
+  overReceivePct   Decimal?            @map("over_receive_pct") @db.Decimal(5, 2)
+  customCode       String?             @map("custom_code") @db.VarChar(30)
+  obsolete         Boolean             @default(false)
+  obsoleteAt       DateTime?           @map("obsolete_at") @db.DateTime(3)
+  obsoleteById     String?             @map("obsolete_by") @db.Char(36)
+  requireIqc       Boolean             @default(false) @map("require_iqc")
+  controlPoint     String?             @map("control_point") @db.VarChar(60)
+  // Others
+  imageFileId      String?             @map("image_file_id") @db.Char(36)
+  categoryId       String?             @map("category_id") @db.Char(36)
+  /// Must belong to categoryId.
+  groupId          String?             @map("group_id") @db.Char(36)
+  stockForm        StockForm?          @map("stock_form")
+  widthMm          Decimal?            @map("width_mm") @db.Decimal(10, 2)
+  lengthM          Decimal?            @map("length_m") @db.Decimal(12, 2)
+  thicknessMicron  Decimal?            @map("thickness_micron") @db.Decimal(8, 1)
+  gsm              Decimal?            @db.Decimal(8, 1)
+  /// Face material / finish, e.g. "White gloss PP", "Semi-gloss paper".
+  faceFinish       String?             @map("face_finish") @db.VarChar(80)
+  /// e.g. "Permanent acrylic", "Removable", "Freezer grade".
+  adhesive         String?             @db.VarChar(80)
+  /// e.g. "Glassine 60 gsm", "PET 23 µm".
+  liner            String?             @db.VarChar(80)
+  coreIdMm         Decimal?            @map("core_id_mm") @db.Decimal(6, 1)
+  /// Colour or Pantone reference.
+  colour           String?             @db.VarChar(60)
+  /// Ink / varnish system (UV, LED-UV, water-based, solvent) or ribbon type (wax, wax-resin, resin).
+  system           String?             @db.VarChar(40)
+  supplierName     String?             @map("supplier_name") @db.VarChar(120)
+  supplierPartNo   String?             @map("supplier_part_no") @db.VarChar(60)
+  shelfLifeDays    Int?                @map("shelf_life_days")
+  /// e.g. "FSC", "FDA food contact", "UL / CSA".
+  certifications   String?             @db.VarChar(120)
+  remarks          String?             @db.VarChar(500)
+  status           RecordStatus        @default(ACTIVE)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById      String?             @map("created_by") @db.Char(36)
+  updatedById      String?             @map("updated_by") @db.Char(36)
+  category         PartCategory?       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  group            PartGroup?          @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  bom              Bom?                @relation("PartArtwork", fields: [bomId], references: [id], onDelete: Restrict)
+  image            StoredFile?         @relation("PartImage", fields: [imageFileId], references: [id], onDelete: Restrict)
+  product          Product?
+  uomConversions   PartUomConversion[]
+  locations        PartLocation[]
+
+  componentLines BomComponentLine[]
+  inspections    QcInspection[]
+  mrsLines       MrsLine[]
+  materialTxns   MaterialTransaction[]
+  sonCodes       BomSonCode[]
+
+  @@index([description])
+  @@index([categoryId])
+  @@index([groupId])
+  @@index([partType])
+  @@map("materials")
+}
+
+/// UOM conversion: 1 uom = factor x the part's own UOM.
+model PartUomConversion {
+  id        String   @id @default(uuid()) @db.Char(36)
+  partId    String   @map("part_id") @db.Char(36)
+  uom       String   @db.VarChar(10)
+  factor    Decimal  @db.Decimal(18, 6)
+  remark    String?  @db.VarChar(120)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  part      Material @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  @@unique([partId, uom])
+  @@map("part_uom_conversions")
+}
+
+/// Location Qty: keyed in by hand until the WMS integration. Not moved by MRS.
+model PartLocation {
+  id            String   @id @default(uuid()) @db.Char(36)
+  partId        String   @map("part_id") @db.Char(36)
+  warehouseCode String   @map("warehouse_code") @db.VarChar(20)
+  locationCode  String   @map("location_code") @db.VarChar(30)
+  shelfLocation String?  @map("shelf_location") @db.VarChar(30)
+  lotNo         String?  @map("lot_no") @db.VarChar(60)
+  doHoldQty     Decimal  @default(0) @map("do_hold_qty") @db.Decimal(18, 4)
+  qty           Decimal  @default(0) @db.Decimal(18, 4)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  updatedById   String   @map("updated_by") @db.Char(36)
+  part          Material @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  @@index([partId])
+  @@map("part_locations")
+}
+
+enum DieType {
+  ROTARY_SOLID
+  FLEXIBLE
+  FLATBED
+}
+
+enum DieShape {
+  RECTANGLE
+  ROUNDED_RECTANGLE
+  CIRCLE
+  OVAL
+  SPECIAL
+}
+
+enum DieCutType {
+  KISS_CUT
+  THROUGH_CUT
+  PERFORATION
+}
+
+enum DieCondition {
+  GOOD
+  WORN
+  DAMAGED
+}
+
+/// Die Cut Master: cutting tools. Sizes are the label (across x around) and
+/// the layout on the die. Code (die no.) immutable; dies are deactivated, never deleted.
+model DieCut {
+  id             String       @id @default(uuid()) @db.Char(36)
+  code           String       @unique @db.VarChar(30)
+  description    String       @db.VarChar(255)
+  dieType        DieType      @map("die_type")
+  cutType        DieCutType   @default(KISS_CUT) @map("cut_type")
+  shape          DieShape     @default(RECTANGLE)
+  labelWidthMm   Decimal      @map("label_width_mm") @db.Decimal(10, 2)
+  labelHeightMm  Decimal      @map("label_height_mm") @db.Decimal(10, 2)
+  cornerRadiusMm Decimal?     @map("corner_radius_mm") @db.Decimal(6, 2)
+  across         Int
+  around         Int          @default(1)
+  gapAcrossMm    Decimal?     @map("gap_across_mm") @db.Decimal(7, 3)
+  gapAroundMm    Decimal?     @map("gap_around_mm") @db.Decimal(7, 3)
+  /// Rotary dies: cylinder gear teeth and repeat length.
+  gearTeeth      Int?         @map("gear_teeth")
+  repeatMm       Decimal?     @map("repeat_mm") @db.Decimal(8, 3)
+  condition      DieCondition @default(GOOD)
+  location       String?      @db.VarChar(60)
+  supplierName   String?      @map("supplier_name") @db.VarChar(120)
+  remarks        String?      @db.VarChar(500)
+  status         RecordStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById    String?      @map("created_by") @db.Char(36)
+  updatedById    String?      @map("updated_by") @db.Char(36)
+
+  @@index([labelWidthMm, labelHeightMm])
+  @@map("die_cuts")
+}
+
+/// Father Code: the artwork parent record.
+model Bom {
+  id                    String    @id @default(uuid()) @db.Char(36)
+  fatherCode            String    @unique @map("father_code") @db.VarChar(30)
+  status                BomStatus @default(ACTIVE)
+  /// Current label description (copy of the current artwork revision, for search and listing).
+  labelDescription      String    @map("label_description") @db.VarChar(500)
+  /// Normalised description (lower case, single spaces) for duplicate detection.
+  descriptionKey        String    @map("description_key") @db.VarChar(500)
+  currentArtworkRevNo   Int       @map("current_artwork_rev_no")
+  /// 0 = no component list yet.
+  currentComponentRevNo Int       @default(0) @map("current_component_rev_no")
+  /// Next Son Code sequence number; never reused.
+  nextSonSeq            Int       @default(1) @map("next_son_seq")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById           String    @map("created_by") @db.Char(36)
+  updatedById           String    @map("updated_by") @db.Char(36)
+
+  artworkRevisions    BomArtworkRevision[]
+  componentRevisions  BomComponentRevision[]
+  sonCodes            BomSonCode[]
+  productionRoutine   ProductionRoutine?
+  productionJobOrders ProductionJobOrder[]
+  product             Product?
+  finishedPart        Material?              @relation("PartArtwork")
+
+  @@index([descriptionKey])
+  @@index([status, updatedAt])
+  @@map("boms")
+}
+
+/// Immutable (triggers). One row per artwork revision of a Father Code.
+model BomArtworkRevision {
+  id                     String               @id @default(uuid()) @db.Char(36)
+  bomId                  String               @map("bom_id") @db.Char(36)
+  revisionNo             Int                  @map("revision_no")
+  labelDescription       String               @map("label_description") @db.VarChar(500)
+  fileId                 String               @map("file_id") @db.Char(36)
+  /// CREATED | ARTWORK_REPLACED | DESCRIPTION_CHANGED | ARTWORK_AND_DESCRIPTION | RESTORED
+  changeType             String               @map("change_type") @db.VarChar(30)
+  changeNote             String?              @map("change_note") @db.VarChar(500)
+  restoredFromRevisionNo Int?                 @map("restored_from_revision_no")
+  createdById            String               @map("created_by") @db.Char(36)
+  createdAt              DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  bom                    Bom                  @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  file                   StoredFile           @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  productionJobOrders    ProductionJobOrder[]
+  masterCards            MasterCardRevision[]
+
+  @@unique([bomId, revisionNo])
+  @@index([fileId])
+  @@map("bom_artwork_revisions")
+}
+
+/// Son Code identity: one component line of a Father Code, stable across
+/// component revisions. Code = <Father Code>-<seq>, never reused.
+model BomSonCode {
+  id          String        @id @default(uuid()) @db.Char(36)
+  bomId       String        @map("bom_id") @db.Char(36)
+  sonCode     String        @unique @map("son_code") @db.VarChar(40)
+  seq         Int
+  /// Material at the time the line was added (current material: latest line).
+  materialId  String        @map("material_id") @db.Char(36)
+  status      SonCodeStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  createdById String        @map("created_by") @db.Char(36)
+  removedAt   DateTime?     @map("removed_at") @db.DateTime(3)
+  removedById String?       @map("removed_by") @db.Char(36)
+  bom         Bom           @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  material    Material      @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  lines    BomComponentLine[]
+  mrsLines MrsLine[]
+
+  @@unique([bomId, seq])
+  @@map("bom_son_codes")
+}
+
+/// Immutable (triggers). One row per BOM component revision; `changes`
+/// records added / modified / removed Son Codes.
+model BomComponentRevision {
+  id                     String   @id @default(uuid()) @db.Char(36)
+  bomId                  String   @map("bom_id") @db.Char(36)
+  revisionNo             Int      @map("revision_no")
+  /// ADDED | MODIFIED | REMOVED | RESTORED
+  changeType             String   @map("change_type") @db.VarChar(30)
+  changes                Json
+  changeNote             String?  @map("change_note") @db.VarChar(500)
+  restoredFromRevisionNo Int?     @map("restored_from_revision_no")
+  createdById            String   @map("created_by") @db.Char(36)
+  createdAt              DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  bom                    Bom      @relation(fields: [bomId], references: [id], onDelete: Restrict)
+
+  lines               BomComponentLine[]
+  productionJobOrders ProductionJobOrder[]
+  masterCards         MasterCardRevision[]
+
+  @@unique([bomId, revisionNo])
+  @@map("bom_component_revisions")
+}
+
+/// Immutable (triggers). Full snapshot of every Son Code line in a component
+/// revision, with the material code / description as they were then.
+model BomComponentLine {
+  id                  String               @id @default(uuid()) @db.Char(36)
+  revisionId          String               @map("revision_id") @db.Char(36)
+  sonCodeId           String               @map("son_code_id") @db.Char(36)
+  lineNo              Int                  @map("line_no")
+  materialId          String               @map("material_id") @db.Char(36)
+  materialCode        String               @map("material_code") @db.VarChar(40)
+  materialDescription String               @map("material_description") @db.VarChar(255)
+  quantity            Decimal?             @db.Decimal(18, 4)
+  uom                 String?              @db.VarChar(10)
+  remarks             String?              @db.VarChar(500)
+  revision            BomComponentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  sonCode             BomSonCode           @relation(fields: [sonCodeId], references: [id], onDelete: Restrict)
+  material            Material             @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  @@unique([revisionId, sonCodeId])
+  @@index([sonCodeId])
+  @@index([materialId])
+  @@map("bom_component_lines")
+}
+
+// ---------------------------------------------------------------------------
+// Planning masters - Machine, Machine Category, Process
+// ---------------------------------------------------------------------------
+
+/// Machine operational status (separate from the master record's is_active).
+/// AVAILABLE free · RUNNING a session is running · IDLE work paused on it ·
+/// BREAKDOWN / MAINTENANCE / OFFLINE blocked for production.
+enum MachineStatus {
+  AVAILABLE
+  RUNNING
+  IDLE
+  BREAKDOWN
+  MAINTENANCE
+  OFFLINE
+}
+
+model Process {
+  id          String       @id @default(uuid()) @db.Char(36)
+  /// Immutable.
+  code        String       @unique @db.VarChar(30)
+  name        String       @db.VarChar(80)
+  description String?      @db.VarChar(255)
+  /// Typical position in the flow (display order only; routes define the real order).
+  sequence    Int          @default(0)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+
+  categories   MachineCategoryProcess[]
+  routineSteps RoutineStep[]
+  woProcesses  WorkOrderProcess[]
+
+  @@map("processes")
+}
+
+model MachineCategory {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(30)
+  name        String       @db.VarChar(80)
+  description String?      @db.VarChar(255)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+
+  processes      MachineCategoryProcess[]
+  qualifications OperatorQualification[]
+  machines       Machine[]
+
+  @@map("machine_categories")
+}
+
+/// Which processes machines of a category can perform.
+model MachineCategoryProcess {
+  categoryId String          @map("category_id") @db.Char(36)
+  processId  String          @map("process_id") @db.Char(36)
+  category   MachineCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  process    Process         @relation(fields: [processId], references: [id], onDelete: Restrict)
+
+  @@id([categoryId, processId])
+  @@map("machine_category_processes")
+}
+
+/// Operators authorised to run machines of a category.
+model OperatorQualification {
+  userId      String          @map("user_id") @db.Char(36)
+  categoryId  String          @map("category_id") @db.Char(36)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  createdById String?         @map("created_by") @db.Char(36)
+  category    MachineCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, categoryId])
+  @@index([categoryId])
+  @@map("operator_qualifications")
+}
+
+model Machine {
+  id              String          @id @default(uuid()) @db.Char(36)
+  /// Immutable. This is the value printed in the machine barcode.
+  code            String          @unique @db.VarChar(30)
+  name            String          @db.VarChar(80)
+  categoryId      String          @map("category_id") @db.Char(36)
+  description     String?         @db.VarChar(255)
+  location        String?         @db.VarChar(80)
+  remarks         String?         @db.VarChar(500)
+  /// Master record active / deactivated (never deleted).
+  isActive        Boolean         @default(true) @map("is_active")
+  status          MachineStatus   @default(AVAILABLE)
+  statusChangedAt DateTime        @default(now()) @map("status_changed_at") @db.DateTime(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById     String?         @map("created_by") @db.Char(36)
+  updatedById     String?         @map("updated_by") @db.Char(36)
+  category        MachineCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  sessions        ProductionSession[]
+  breakdowns      MachineBreakdown[]
+  devices         HandheldDevice[]
+  scheduleEntries ScheduleEntry[]
+
+  @@index([status])
+  @@map("machines")
+}
+
+/// Handheld device (id generated on the device). A device may be pinned to a
+/// machine so operators don't scan the machine barcode every time.
+model HandheldDevice {
+  id                String   @id @db.VarChar(80)
+  name              String?  @db.VarChar(80)
+  assignedMachineId String?  @map("assigned_machine_id") @db.Char(36)
+  lastSeenAt        DateTime @default(now()) @map("last_seen_at") @db.DateTime(3)
+  lastUserId        String?  @map("last_user_id") @db.Char(36)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedById       String?  @map("updated_by") @db.Char(36)
+  assignedMachine   Machine? @relation(fields: [assignedMachineId], references: [id], onDelete: SetNull)
+
+  @@map("handheld_devices")
+}
+
+// ---------------------------------------------------------------------------
+// Routines (Shopfloor masters)
+// ---------------------------------------------------------------------------
+
+model Routine {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(30)
+  name        String       @db.VarChar(80)
+  description String?      @db.VarChar(255)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+
+  steps              RoutineStep[]
+  productionRoutines ProductionRoutine[]
+  masterCards        MasterCardRevision[]
+
+  @@map("routines")
+}
+
+model RoutineStep {
+  id        String  @id @default(uuid()) @db.Char(36)
+  routineId String  @map("routine_id") @db.Char(36)
+  seq       Int
+  processId String  @map("process_id") @db.Char(36)
+  routine   Routine @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  process   Process @relation(fields: [processId], references: [id], onDelete: Restrict)
+
+  @@unique([routineId, seq])
+  @@map("routine_steps")
+}
+
+/// Production Routine Master: which routine a Father Code follows by default.
+model ProductionRoutine {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(30)
+  bomId       String       @unique @map("bom_id") @db.Char(36)
+  routineId   String       @map("routine_id") @db.Char(36)
+  remarks     String?      @db.VarChar(500)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+  bom         Bom          @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  routine     Routine      @relation(fields: [routineId], references: [id], onDelete: Restrict)
+
+  @@map("production_routines")
+}
+
+// ---------------------------------------------------------------------------
+// Production Job Order -> Job Order (Work Order) -> process route
+// ---------------------------------------------------------------------------
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum PjoStatus {
+  DRAFT
+  RELEASED
+  CLOSED
+  CANCELLED
+}
+
+enum WorkOrderStatus {
+  PLANNED
+  RELEASED
+  IN_PROGRESS
+  PARTIALLY_COMPLETED
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+}
+
+enum WoProcessStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+}
+
+model ProductionJobOrder {
+  id                   String                @id @default(uuid()) @db.Char(36)
+  pjoNo                String                @unique @map("pjo_no") @db.VarChar(30)
+  bomId                String                @map("bom_id") @db.Char(36)
+  /// Exact revisions; frozen at release (BOM changes afterwards never touch them).
+  artworkRevisionId    String                @map("artwork_revision_id") @db.Char(36)
+  componentRevisionId  String?               @map("component_revision_id") @db.Char(36)
+  /// Product and Master Card revision the order was frozen on (null for Father Codes without a product).
+  productId            String?               @map("product_id") @db.Char(36)
+  masterCardRevisionId String?               @map("master_card_revision_id") @db.Char(36)
+  customerRef          String?               @map("customer_ref") @db.VarChar(120)
+  productRef           String?               @map("product_ref") @db.VarChar(120)
+  orderQty             Decimal               @map("order_qty") @db.Decimal(18, 4)
+  uom                  String                @db.VarChar(10)
+  requiredDate         DateTime?             @map("required_date") @db.Date
+  priority             Priority              @default(NORMAL)
+  status               PjoStatus             @default(DRAFT)
+  remarks              String?               @db.VarChar(500)
+  releasedAt           DateTime?             @map("released_at") @db.DateTime(3)
+  releasedById         String?               @map("released_by") @db.Char(36)
+  /// Production Order Complete Utility.
+  closedAt             DateTime?             @map("closed_at") @db.DateTime(3)
+  closedById           String?               @map("closed_by") @db.Char(36)
+  closureNote          String?               @map("closure_note") @db.VarChar(500)
+  /// Closed with authorised exceptions (warnings overridden).
+  closureOverride      Boolean               @default(false) @map("closure_override")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById          String                @map("created_by") @db.Char(36)
+  updatedById          String                @map("updated_by") @db.Char(36)
+  bom                  Bom                   @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  artworkRevision      BomArtworkRevision    @relation(fields: [artworkRevisionId], references: [id], onDelete: Restrict)
+  componentRevision    BomComponentRevision? @relation(fields: [componentRevisionId], references: [id], onDelete: Restrict)
+  product              Product?              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  masterCardRevision   MasterCardRevision?   @relation(fields: [masterCardRevisionId], references: [id], onDelete: Restrict)
+
+  workOrders WorkOrder[]
+
+  @@index([status, requiredDate])
+  @@index([bomId])
+  @@map("production_job_orders")
+}
+
+/// TBS "Job Order" = the Work Order: the primary production reference. Its
+/// number is the value printed in the Work Order barcode.
+model WorkOrder {
+  id             String             @id @default(uuid()) @db.Char(36)
+  woNo           String             @unique @map("wo_no") @db.VarChar(30)
+  pjoId          String             @map("pjo_id") @db.Char(36)
+  quantity       Decimal            @db.Decimal(18, 4)
+  uom            String             @db.VarChar(10)
+  plannedDate    DateTime?          @map("planned_date") @db.Date
+  priority       Priority           @default(NORMAL)
+  status         WorkOrderStatus    @default(PLANNED)
+  remarks        String?            @db.VarChar(500)
+  holdReason     String?            @map("hold_reason") @db.VarChar(500)
+  releasedAt     DateTime?          @map("released_at") @db.DateTime(3)
+  releasedById   String?            @map("released_by") @db.Char(36)
+  completedAt    DateTime?          @map("completed_at") @db.DateTime(3)
+  completedById  String?            @map("completed_by") @db.Char(36)
+  completionNote String?            @map("completion_note") @db.VarChar(500)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById    String             @map("created_by") @db.Char(36)
+  updatedById    String             @map("updated_by") @db.Char(36)
+  pjo            ProductionJobOrder @relation(fields: [pjoId], references: [id], onDelete: Restrict)
+
+  processes       WorkOrderProcess[]
+  sessions        ProductionSession[]
+  scheduleEntries ScheduleEntry[]
+  requisitions    MaterialRequisition[]
+  inspections     QcInspection[]
+
+  @@index([status, plannedDate])
+  @@index([pjoId])
+  @@map("work_orders")
+}
+
+/// One step of a Work Order's route. Quantities are running totals kept in
+/// the same transaction as the output rows they summarise.
+model WorkOrderProcess {
+  id                   String          @id @default(uuid()) @db.Char(36)
+  workOrderId          String          @map("work_order_id") @db.Char(36)
+  seq                  Int
+  processId            String          @map("process_id") @db.Char(36)
+  status               WoProcessStatus @default(PENDING)
+  /// Current machine assignment (set at first Check In or by a machine change).
+  assignedMachineId    String?         @map("assigned_machine_id") @db.Char(36)
+  /// Supervisor authorisations.
+  allowPartialTransfer Boolean         @default(false) @map("allow_partial_transfer")
+  allowSplit           Boolean         @default(false) @map("allow_split")
+  extraAllowedQty      Decimal         @default(0) @map("extra_allowed_qty") @db.Decimal(18, 4)
+  goodQty              Decimal         @default(0) @map("good_qty") @db.Decimal(18, 4)
+  rejectQty            Decimal         @default(0) @map("reject_qty") @db.Decimal(18, 4)
+  startedAt            DateTime?       @map("started_at") @db.DateTime(3)
+  completedAt          DateTime?       @map("completed_at") @db.DateTime(3)
+  completedById        String?         @map("completed_by") @db.Char(36)
+  completionNote       String?         @map("completion_note") @db.VarChar(500)
+  workOrder            WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  process              Process         @relation(fields: [processId], references: [id], onDelete: Restrict)
+
+  sessions        ProductionSession[]
+  changes         MachineChange[]
+  scheduleEntries ScheduleEntry[]
+
+  @@unique([workOrderId, seq])
+  @@index([assignedMachineId])
+  @@map("work_order_processes")
+}
+
+// ---------------------------------------------------------------------------
+// Shopfloor: production sessions (Check In = start, Check Out = end)
+// ---------------------------------------------------------------------------
+
+enum SessionStatus {
+  RUNNING
+  COMPLETED
+  PAUSED
+  BREAKDOWN
+  TRANSFERRED
+  CLOSED
+}
+
+enum CheckOutType {
+  COMPLETED
+  PARTIAL
+  SHIFT_END
+  MACHINE_CHANGE
+  MACHINE_BREAKDOWN
+}
+
+enum BreakdownStatus {
+  OPEN
+  UNDER_MAINTENANCE
+  RESOLVED
+}
+
+enum MachineChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ProductionSession {
+  id               String           @id @default(uuid()) @db.Char(36)
+  sessionNo        String           @unique @map("session_no") @db.VarChar(30)
+  workOrderId      String           @map("work_order_id") @db.Char(36)
+  woProcessId      String           @map("wo_process_id") @db.Char(36)
+  machineId        String           @map("machine_id") @db.Char(36)
+  operatorId       String           @map("operator_id") @db.Char(36)
+  checkInAt        DateTime         @map("check_in_at") @db.DateTime(3)
+  checkOutAt       DateTime?        @map("check_out_at") @db.DateTime(3)
+  status           SessionStatus    @default(RUNNING)
+  checkOutType     CheckOutType?    @map("check_out_type")
+  /// Quantity this process could still take when the session started.
+  availableAtStart Decimal          @map("available_at_start") @db.Decimal(18, 4)
+  goodQty          Decimal          @default(0) @map("good_qty") @db.Decimal(18, 4)
+  rejectQty        Decimal          @default(0) @map("reject_qty") @db.Decimal(18, 4)
+  remarks          String?          @db.VarChar(500)
+  checkInDeviceId  String?          @map("check_in_device_id") @db.VarChar(80)
+  checkOutDeviceId String?          @map("check_out_device_id") @db.VarChar(80)
+  checkOutById     String?          @map("check_out_by") @db.Char(36)
+  workOrder        WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  woProcess        WorkOrderProcess @relation(fields: [woProcessId], references: [id], onDelete: Restrict)
+  machine          Machine          @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  outputs ProductionOutput[]
+
+  @@index([machineId, status])
+  @@index([woProcessId, status])
+  @@index([operatorId, checkInAt])
+  @@index([checkInAt])
+  @@map("production_sessions")
+}
+
+/// Append-only output entries (interim, at Check Out, at breakdown).
+model ProductionOutput {
+  id           BigInt            @id @default(autoincrement())
+  sessionId    String            @map("session_id") @db.Char(36)
+  woProcessId  String            @map("wo_process_id") @db.Char(36)
+  machineId    String            @map("machine_id") @db.Char(36)
+  operatorId   String            @map("operator_id") @db.Char(36)
+  kind         String            @db.VarChar(20)
+  goodQty      Decimal           @map("good_qty") @db.Decimal(18, 4)
+  rejectQty    Decimal           @map("reject_qty") @db.Decimal(18, 4)
+  rejectReason String?           @map("reject_reason") @db.VarChar(255)
+  recordedAt   DateTime          @map("recorded_at") @db.DateTime(3)
+  deviceId     String?           @map("device_id") @db.VarChar(80)
+  session      ProductionSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@index([machineId, recordedAt])
+  @@index([woProcessId])
+  @@map("production_outputs")
+}
+
+model MachineBreakdown {
+  id                   String          @id @default(uuid()) @db.Char(36)
+  breakdownNo          String          @unique @map("breakdown_no") @db.VarChar(30)
+  machineId            String          @map("machine_id") @db.Char(36)
+  sessionId            String?         @map("session_id") @db.Char(36)
+  workOrderId          String?         @map("work_order_id") @db.Char(36)
+  woProcessId          String?         @map("wo_process_id") @db.Char(36)
+  reason               String          @db.VarChar(40)
+  remarks              String?         @db.VarChar(500)
+  reportedAt           DateTime        @map("reported_at") @db.DateTime(3)
+  reportedById         String          @map("reported_by") @db.Char(36)
+  lastConfirmedGood    Decimal?        @map("last_confirmed_good") @db.Decimal(18, 4)
+  status               BreakdownStatus @default(OPEN)
+  maintenanceNote      String?         @map("maintenance_note") @db.VarChar(500)
+  maintenanceStartedAt DateTime?       @map("maintenance_started_at") @db.DateTime(3)
+  maintenanceById      String?         @map("maintenance_by") @db.Char(36)
+  resolvedAt           DateTime?       @map("resolved_at") @db.DateTime(3)
+  resolvedById         String?         @map("resolved_by") @db.Char(36)
+  resolutionNote       String?         @map("resolution_note") @db.VarChar(500)
+  /// The releasing person confirmed physical inspection + safety clearance.
+  safetyConfirmed      Boolean         @default(false) @map("safety_confirmed")
+  machine              Machine         @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  @@index([machineId, reportedAt])
+  @@index([status])
+  @@map("machine_breakdowns")
+}
+
+model MachineChange {
+  id                String              @id @default(uuid()) @db.Char(36)
+  workOrderId       String              @map("work_order_id") @db.Char(36)
+  woProcessId       String              @map("wo_process_id") @db.Char(36)
+  fromMachineId     String?             @map("from_machine_id") @db.Char(36)
+  toMachineId       String              @map("to_machine_id") @db.Char(36)
+  fromSessionId     String?             @map("from_session_id") @db.Char(36)
+  prevMachineGood   Decimal             @map("prev_machine_good") @db.Decimal(18, 4)
+  prevMachineReject Decimal             @map("prev_machine_reject") @db.Decimal(18, 4)
+  outstandingQty    Decimal             @map("outstanding_qty") @db.Decimal(18, 4)
+  reason            String              @db.VarChar(500)
+  status            MachineChangeStatus
+  requestedById     String              @map("requested_by") @db.Char(36)
+  requestedAt       DateTime            @map("requested_at") @db.DateTime(3)
+  decidedById       String?             @map("decided_by") @db.Char(36)
+  decidedAt         DateTime?           @map("decided_at") @db.DateTime(3)
+  decisionNote      String?             @map("decision_note") @db.VarChar(500)
+  woProcess         WorkOrderProcess    @relation(fields: [woProcessId], references: [id], onDelete: Restrict)
+
+  @@index([woProcessId, status])
+  @@index([requestedAt])
+  @@map("machine_changes")
+}
+
+/// Idempotency: one row per handheld transaction id. A retried request with
+/// the same id gets the stored response instead of being applied twice.
+model ShopfloorTransaction {
+  clientTxnId String   @id @map("client_txn_id") @db.VarChar(64)
+  kind        String   @db.VarChar(30)
+  userId      String   @map("user_id") @db.Char(36)
+  response    Json
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@map("shopfloor_transactions")
+}
+
+/// Document number sequences (BOM code, PJO no., JO no., MRS no., WIP id...).
+/// Incremented with SELECT ... FOR UPDATE inside the creating transaction.
+model NumberSequence {
+  key       String   @id @db.VarChar(40)
+  prefix    String   @db.VarChar(20)
+  padding   Int      @default(6)
+  nextValue Int      @default(1) @map("next_value")
+  /// When true the number restarts each year and the year is part of the number.
+  yearly    Boolean  @default(false)
+  year      Int?
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@map("number_sequences")
+}
+
+// ---------------------------------------------------------------------------
+// Pre-Plan (schedule) and material: MRS, additional issue, return, reject, scrap
+// ---------------------------------------------------------------------------
+
+/// Pre-Plan: one Job Order route step planned on a machine for a day.
+model ScheduleEntry {
+  id          String           @id @default(uuid()) @db.Char(36)
+  workOrderId String           @map("work_order_id") @db.Char(36)
+  woProcessId String           @map("wo_process_id") @db.Char(36)
+  machineId   String           @map("machine_id") @db.Char(36)
+  planDate    DateTime         @map("plan_date") @db.Date
+  /// Order of the job on that machine for that day (1 = first).
+  seq         Int
+  plannedQty  Decimal          @map("planned_qty") @db.Decimal(18, 4)
+  note        String?          @db.VarChar(500)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String           @map("created_by") @db.Char(36)
+  updatedById String           @map("updated_by") @db.Char(36)
+  workOrder   WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  woProcess   WorkOrderProcess @relation(fields: [woProcessId], references: [id], onDelete: Restrict)
+  machine     Machine          @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  @@unique([woProcessId, machineId, planDate])
+  @@index([planDate, machineId, seq])
+  @@map("schedule_entries")
+}
+
+enum MrsStatus {
+  OPEN
+  PARTIALLY_ISSUED
+  ISSUED
+  CLOSED
+  CANCELLED
+}
+
+enum MaterialTxnType {
+  ISSUE
+  ADDITIONAL_ISSUE
+  RETURN
+  REJECT
+  SCRAP
+}
+
+enum ReasonCategory {
+  ADDITIONAL_ISSUE
+  REJECT
+  SCRAP
+}
+
+/// Reasons for additional issue, reject and scrap. Maintained by the factory; none are shipped.
+model ReasonCode {
+  id          String         @id @default(uuid()) @db.Char(36)
+  category    ReasonCategory
+  /// Immutable.
+  code        String         @db.VarChar(30)
+  description String         @db.VarChar(255)
+  status      RecordStatus   @default(ACTIVE)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String         @map("created_by") @db.Char(36)
+  updatedById String         @map("updated_by") @db.Char(36)
+
+  transactions MaterialTransaction[]
+
+  @@unique([category, code])
+  @@map("reason_codes")
+}
+
+/// Material Requisition Sheet for one Job Order; lines come from the frozen BOM revision of its PJO.
+model MaterialRequisition {
+  id          String    @id @default(uuid()) @db.Char(36)
+  mrsNo       String    @unique @map("mrs_no") @db.VarChar(30)
+  workOrderId String    @map("work_order_id") @db.Char(36)
+  status      MrsStatus @default(OPEN)
+  remarks     String?   @db.VarChar(500)
+  closedAt    DateTime? @map("closed_at") @db.DateTime(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String    @map("created_by") @db.Char(36)
+  updatedById String    @map("updated_by") @db.Char(36)
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+
+  lines        MrsLine[]
+  transactions MaterialTransaction[]
+
+  @@index([workOrderId])
+  @@index([status])
+  @@map("material_requisitions")
+}
+
+/// Running totals are updated in the same transaction as the material transactions they summarise.
+model MrsLine {
+  id                  String              @id @default(uuid()) @db.Char(36)
+  mrsId               String              @map("mrs_id") @db.Char(36)
+  lineNo              Int                 @map("line_no")
+  sonCodeId           String?             @map("son_code_id") @db.Char(36)
+  materialId          String              @map("material_id") @db.Char(36)
+  materialCode        String              @map("material_code") @db.VarChar(40)
+  materialDescription String              @map("material_description") @db.VarChar(255)
+  uom                 String              @db.VarChar(10)
+  requestedQty        Decimal             @map("requested_qty") @db.Decimal(18, 4)
+  issuedQty           Decimal             @default(0) @map("issued_qty") @db.Decimal(18, 4)
+  additionalQty       Decimal             @default(0) @map("additional_qty") @db.Decimal(18, 4)
+  returnedQty         Decimal             @default(0) @map("returned_qty") @db.Decimal(18, 4)
+  rejectedQty         Decimal             @default(0) @map("rejected_qty") @db.Decimal(18, 4)
+  scrappedQty         Decimal             @default(0) @map("scrapped_qty") @db.Decimal(18, 4)
+  mrs                 MaterialRequisition @relation(fields: [mrsId], references: [id], onDelete: Restrict)
+  material            Material            @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  sonCode             BomSonCode?         @relation(fields: [sonCodeId], references: [id], onDelete: Restrict)
+
+  transactions MaterialTransaction[]
+
+  @@unique([mrsId, lineNo])
+  @@index([materialId])
+  @@map("mrs_lines")
+}
+
+/// Append-only (triggers): issue, additional issue, return, reject, scrap.
+model MaterialTransaction {
+  id           BigInt              @id @default(autoincrement())
+  txnNo        String              @unique @map("txn_no") @db.VarChar(30)
+  type         MaterialTxnType
+  mrsId        String              @map("mrs_id") @db.Char(36)
+  mrsLineId    String              @map("mrs_line_id") @db.Char(36)
+  workOrderId  String              @map("work_order_id") @db.Char(36)
+  materialId   String              @map("material_id") @db.Char(36)
+  qty          Decimal             @db.Decimal(18, 4)
+  uom          String              @db.VarChar(10)
+  lotRef       String?             @map("lot_ref") @db.VarChar(80)
+  reasonCodeId String?             @map("reason_code_id") @db.Char(36)
+  machineId    String?             @map("machine_id") @db.Char(36)
+  woProcessId  String?             @map("wo_process_id") @db.Char(36)
+  remarks      String?             @db.VarChar(500)
+  createdById  String              @map("created_by") @db.Char(36)
+  createdAt    DateTime            @map("created_at") @db.DateTime(3)
+  mrs          MaterialRequisition @relation(fields: [mrsId], references: [id], onDelete: Restrict)
+  line         MrsLine             @relation(fields: [mrsLineId], references: [id], onDelete: Restrict)
+  material     Material            @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  reasonCode   ReasonCode?         @relation(fields: [reasonCodeId], references: [id], onDelete: Restrict)
+
+  @@index([mrsId])
+  @@index([workOrderId])
+  @@index([type, createdAt])
+  @@map("material_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Product Master and Master Card (approved bundle production runs from)
+// ---------------------------------------------------------------------------
+
+enum CardStatus {
+  DRAFT
+  RELEASED
+  SUPERSEDED
+}
+
+/// The label item the customer orders. One Father Code belongs to exactly one product.
+model Product {
+  id               String       @id @default(uuid()) @db.Char(36)
+  /// Immutable, upper-case (usually the ERP item code).
+  productCode      String       @unique @map("product_code") @db.VarChar(40)
+  name             String       @db.VarChar(200)
+  customerName     String?      @map("customer_name") @db.VarChar(200)
+  customerPartNo   String?      @map("customer_part_no") @db.VarChar(80)
+  uom              String       @db.VarChar(10)
+  bomId            String       @unique @map("bom_id") @db.Char(36)
+  /// The finished-good part this record belongs to (Part Master is the item list).
+  partId           String       @unique @map("part_id") @db.Char(36)
+  status           RecordStatus @default(ACTIVE)
+  /// 0 = no released Master Card yet.
+  currentCardRevNo Int          @default(0) @map("current_card_rev_no")
+  remarks          String?      @db.VarChar(500)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById      String       @map("created_by") @db.Char(36)
+  updatedById      String       @map("updated_by") @db.Char(36)
+  bom              Bom          @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  part             Material     @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  cards               MasterCardRevision[]
+  productionJobOrders ProductionJobOrder[]
+
+  @@index([status])
+  @@map("products")
+}
+
+/// Master Card revision: one specification + one artwork revision + one BOM
+/// revision + routing + tooling refs. Released / superseded rows are immutable (triggers).
+model MasterCardRevision {
+  id                  String                @id @default(uuid()) @db.Char(36)
+  productId           String                @map("product_id") @db.Char(36)
+  revisionNo          Int                   @map("revision_no")
+  status              CardStatus            @default(DRAFT)
+  artworkRevisionId   String                @map("artwork_revision_id") @db.Char(36)
+  componentRevisionId String?               @map("component_revision_id") @db.Char(36)
+  routineId           String?               @map("routine_id") @db.Char(36)
+  spec                Json
+  changeNote          String?               @map("change_note") @db.VarChar(500)
+  createdById         String                @map("created_by") @db.Char(36)
+  createdAt           DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.DateTime(3)
+  releasedById        String?               @map("released_by") @db.Char(36)
+  releasedAt          DateTime?             @map("released_at") @db.DateTime(3)
+  supersededAt        DateTime?             @map("superseded_at") @db.DateTime(3)
+  product             Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  artworkRevision     BomArtworkRevision    @relation(fields: [artworkRevisionId], references: [id], onDelete: Restrict)
+  componentRevision   BomComponentRevision? @relation(fields: [componentRevisionId], references: [id], onDelete: Restrict)
+  routine             Routine?              @relation(fields: [routineId], references: [id], onDelete: Restrict)
+
+  productionJobOrders ProductionJobOrder[]
+
+  @@unique([productId, revisionNo])
+  @@index([productId, status])
+  @@map("master_card_revisions")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 – QC
+// ---------------------------------------------------------------------------
+
+enum DefectCategory {
+  PRINT
+  COLOUR
+  REGISTRATION
+  DIE_CUT
+  MATERIAL
+  ADHESIVE
+  LAMINATION
+  SLITTING
+  WINDING
+  CONTAMINATION
+  PACKAGING
+  OTHER
+}
+
+enum DefectSeverity {
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+/// Defect Master: central defect codes shared by Shopfloor and QC. Code immutable.
+model DefectCode {
+  id          String         @id @default(uuid()) @db.Char(36)
+  code        String         @unique @db.VarChar(20)
+  name        String         @db.VarChar(80)
+  category    DefectCategory
+  severity    DefectSeverity @default(MAJOR)
+  appliesIqc  Boolean        @default(true) @map("applies_iqc")
+  appliesOqc  Boolean        @default(true) @map("applies_oqc")
+  description String?        @db.VarChar(255)
+  status      RecordStatus   @default(ACTIVE)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?        @map("created_by") @db.Char(36)
+  updatedById String?        @map("updated_by") @db.Char(36)
+
+  findings QcDefect[]
+
+  @@map("defect_codes")
+}
+
+enum QcType {
+  IQC
+  OQC
+}
+
+/// Inspection Template: the checks an IQC / OQC inspection records. Items are
+/// a JSON list (label, kind PASS_FAIL or MEASURE, target, min, max, unit,
+/// required). Inspections copy them at Check In, so edits never change
+/// past inspections.
+model InspectionTemplate {
+  id             String        @id @default(uuid()) @db.Char(36)
+  code           String        @unique @db.VarChar(20)
+  name           String        @db.VarChar(80)
+  type           QcType
+  /// IQC: default template for parts of this category.
+  partCategoryId String?       @map("part_category_id") @db.Char(36)
+  items          Json
+  status         RecordStatus  @default(ACTIVE)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById    String?       @map("created_by") @db.Char(36)
+  updatedById    String?       @map("updated_by") @db.Char(36)
+  partCategory   PartCategory? @relation(fields: [partCategoryId], references: [id], onDelete: Restrict)
+
+  inspections QcInspection[]
+
+  @@map("inspection_templates")
+}
+
+/// IN_INSPECTION (checked in, on QC hold) then PASSED or PENDING_DISPOSITION;
+/// PENDING_DISPOSITION then ACCEPTED (use as is) / REJECTED / REWORK (OQC,
+/// a reinspection follows) / RETURNED (IQC, back to the supplier).
+enum QcStatus {
+  IN_INSPECTION
+  PASSED
+  PENDING_DISPOSITION
+  ACCEPTED
+  REJECTED
+  REWORK
+  RETURNED
+}
+
+enum QcResult {
+  PASS
+  FAIL
+}
+
+enum QcDisposition {
+  USE_AS_IS
+  REJECT
+  REWORK
+  RETURN_TO_SUPPLIER
+}
+
+model QcInspection {
+  id               String              @id @default(uuid()) @db.Char(36)
+  inspNo           String              @unique @map("insp_no") @db.VarChar(30)
+  type             QcType
+  status           QcStatus            @default(IN_INSPECTION)
+  templateId       String?             @map("template_id") @db.Char(36)
+  /// Template items copied at Check In, with the results recorded at Check Out.
+  checks           Json
+  /// IQC: the part lot received.
+  materialId       String?             @map("material_id") @db.Char(36)
+  lotRef           String?             @map("lot_ref") @db.VarChar(60)
+  supplierName     String?             @map("supplier_name") @db.VarChar(120)
+  deliveryRef      String?             @map("delivery_ref") @db.VarChar(60)
+  /// OQC: the Job Order whose finished output is offered.
+  workOrderId      String?             @map("work_order_id") @db.Char(36)
+  reinspectionOfId String?             @unique @map("reinspection_of_id") @db.Char(36)
+  qty              Decimal             @db.Decimal(18, 4)
+  uom              String              @db.VarChar(10)
+  /// Null = 100 percent inspection.
+  sampleSize       Decimal?            @map("sample_size") @db.Decimal(18, 4)
+  goodQty          Decimal?            @map("good_qty") @db.Decimal(18, 4)
+  rejectQty        Decimal?            @map("reject_qty") @db.Decimal(18, 4)
+  result           QcResult?
+  remarks          String?             @db.VarChar(500)
+  checkedInAt      DateTime            @map("checked_in_at") @db.DateTime(3)
+  checkedInById    String              @map("checked_in_by") @db.Char(36)
+  checkedOutAt     DateTime?           @map("checked_out_at") @db.DateTime(3)
+  checkedOutById   String?             @map("checked_out_by") @db.Char(36)
+  disposition      QcDisposition?
+  dispositionNote  String?             @map("disposition_note") @db.VarChar(500)
+  dispositionAt    DateTime?           @map("disposition_at") @db.DateTime(3)
+  dispositionById  String?             @map("disposition_by") @db.Char(36)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  template         InspectionTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  material         Material?           @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  workOrder        WorkOrder?          @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  reinspectionOf   QcInspection?       @relation("Reinspection", fields: [reinspectionOfId], references: [id], onDelete: Restrict)
+  reinspection     QcInspection?       @relation("Reinspection")
+
+  defects QcDefect[]
+  labels  ShippingLabel[]
+
+  @@index([type, status])
+  @@index([materialId, lotRef])
+  @@index([workOrderId])
+  @@map("qc_inspections")
+}
+
+model QcDefect {
+  id           String       @id @default(uuid()) @db.Char(36)
+  inspectionId String       @map("inspection_id") @db.Char(36)
+  defectCodeId String       @map("defect_code_id") @db.Char(36)
+  qty          Decimal      @db.Decimal(18, 4)
+  remark       String?      @db.VarChar(255)
+  inspection   QcInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  defectCode   DefectCode   @relation(fields: [defectCodeId], references: [id], onDelete: Restrict)
+
+  @@index([inspectionId])
+  @@map("qc_defects")
+}
+
+enum BarcodeKind {
+  CODE128
+  QR
+}
+
+/// Shipping label template: size, the fields printed and the barcode.
+model LabelTemplate {
+  id           String       @id @default(uuid()) @db.Char(36)
+  code         String       @unique @db.VarChar(20)
+  name         String       @db.VarChar(80)
+  widthMm      Int          @map("width_mm")
+  heightMm     Int          @map("height_mm")
+  /// Ordered list of field keys (LABEL_FIELDS in the label routes).
+  fields       Json
+  barcode      BarcodeKind  @default(CODE128)
+  /// Field whose value goes into the barcode.
+  barcodeField String       @default("labelNo") @map("barcode_field") @db.VarChar(30)
+  status       RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById  String?      @map("created_by") @db.Char(36)
+  updatedById  String?      @map("updated_by") @db.Char(36)
+
+  labels ShippingLabel[]
+
+  @@map("label_templates")
+}
+
+enum LabelStatus {
+  ACTIVE
+  VOID
+}
+
+/// One carton label from a released OQC. Printed values are frozen in data.
+model ShippingLabel {
+  id            String        @id @default(uuid()) @db.Char(36)
+  labelNo       String        @unique @map("label_no") @db.VarChar(30)
+  inspectionId  String        @map("inspection_id") @db.Char(36)
+  templateId    String        @map("template_id") @db.Char(36)
+  cartonNo      Int           @map("carton_no")
+  cartonCount   Int           @map("carton_count")
+  qty           Decimal       @db.Decimal(18, 4)
+  uom           String        @db.VarChar(10)
+  data          Json
+  status        LabelStatus   @default(ACTIVE)
+  printCount    Int           @default(0) @map("print_count")
+  lastPrintedAt DateTime?     @map("last_printed_at") @db.DateTime(3)
+  voidReason    String?       @map("void_reason") @db.VarChar(255)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  createdById   String        @map("created_by") @db.Char(36)
+  inspection    QcInspection  @relation(fields: [inspectionId], references: [id], onDelete: Restrict)
+  template      LabelTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@index([inspectionId])
+  @@map("shipping_labels")
+}
+
+/// Printed documents that end users design with a template (header, content sections, footer).
+enum DocumentType {
+  PJO
+  JOB_ORDER
+  MRS
+  MASTER_CARD
+  IQC_REPORT
+  OQC_REPORT
+}
+
+/// Layout of one printed document: page, header, content sections, notes,
+/// signatures and footer (validated by the documents routes). One active
+/// default per document type; printing never stores the document.
+model DocumentTemplate {
+  id          String       @id @default(uuid()) @db.Char(36)
+  code        String       @unique @db.VarChar(20)
+  name        String       @db.VarChar(80)
+  docType     DocumentType @map("doc_type")
+  isDefault   Boolean      @default(false) @map("is_default")
+  layout      Json
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  createdById String?      @map("created_by") @db.Char(36)
+  updatedById String?      @map("updated_by") @db.Char(36)
+
+  @@index([docType, status])
+  @@map("document_templates")
+}
+
+/// Company letterhead shared by every document template (one row, id "company").
+model DocumentSetting {
+  id             String   @id @db.VarChar(20)
+  companyName    String   @map("company_name") @db.VarChar(160)
+  registrationNo String?  @map("registration_no") @db.VarChar(60)
+  address        String?  @db.VarChar(500)
+  phone          String?  @db.VarChar(60)
+  email          String?  @db.VarChar(120)
+  website        String?  @db.VarChar(120)
+  /// Small PNG / JPEG logo as a data URL (max ~300 KB).
+  logo           String?  @db.MediumText
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  updatedById    String?  @map("updated_by") @db.Char(36)
+
+  @@map("document_settings")
+}

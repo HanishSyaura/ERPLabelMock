@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.local
+server/src/generated/
+server/storage/
+coverage/
+.vite/

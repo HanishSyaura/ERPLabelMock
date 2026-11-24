@@ -1,0 +1,214 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. Components use these (bg-surface, text-muted, border-line,
+ * bg-primary...) - never raw palette classes or hex values.
+ */
+:root {
+  --c-bg: #f4f6f9;
+  --c-surface: #ffffff;
+  --c-surface-2: #f8fafc;
+  --c-line: #dfe3ea;
+  --c-text: #111827;
+  --c-muted: #5b6474;
+  --c-primary: #1d4ed8;
+  --c-primary-hover: #1e40af;
+  --c-primary-soft: #e8efff;
+  --c-on-primary: #ffffff;
+  --c-success: #15803d;
+  --c-success-soft: #e7f6ec;
+  --c-warning: #b45309;
+  --c-warning-soft: #fdf3e2;
+  --c-danger: #b91c1c;
+  --c-danger-soft: #fdecec;
+  --c-info: #0e7490;
+  --c-info-soft: #e3f5f8;
+  --c-neutral-soft: #eef1f5;
+  --c-nav: #0f172a;
+  --c-nav-hover: #1e293b;
+  --c-nav-active: #1d4ed8;
+  --c-nav-text: #cbd5e1;
+  --c-nav-muted: #64748b;
+  --c-focus: #2563eb;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-bg: #0b1120;
+    --c-surface: #111827;
+    --c-surface-2: #162032;
+    --c-line: #263244;
+    --c-text: #e5e7eb;
+    --c-muted: #94a3b8;
+    --c-primary: #3b82f6;
+    --c-primary-hover: #60a5fa;
+    --c-primary-soft: #172554;
+    --c-success: #4ade80;
+    --c-success-soft: #052e16;
+    --c-warning: #fbbf24;
+    --c-warning-soft: #3a2504;
+    --c-danger: #f87171;
+    --c-danger-soft: #3b0b0b;
+    --c-info: #22d3ee;
+    --c-info-soft: #083344;
+    --c-neutral-soft: #1f2937;
+    --c-nav: #070b14;
+    --c-nav-hover: #111827;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --c-bg: #0b1120;
+  --c-surface: #111827;
+  --c-surface-2: #162032;
+  --c-line: #263244;
+  --c-text: #e5e7eb;
+  --c-muted: #94a3b8;
+  --c-primary: #3b82f6;
+  --c-primary-hover: #60a5fa;
+  --c-primary-soft: #172554;
+  --c-success: #4ade80;
+  --c-success-soft: #052e16;
+  --c-warning: #fbbf24;
+  --c-warning-soft: #3a2504;
+  --c-danger: #f87171;
+  --c-danger-soft: #3b0b0b;
+  --c-info: #22d3ee;
+  --c-info-soft: #083344;
+  --c-neutral-soft: #1f2937;
+  --c-nav: #070b14;
+  --c-nav-hover: #111827;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-text: var(--c-text);
+  --color-muted: var(--c-muted);
+  --color-primary: var(--c-primary);
+  --color-primary-hover: var(--c-primary-hover);
+  --color-primary-soft: var(--c-primary-soft);
+  --color-on-primary: var(--c-on-primary);
+  --color-success: var(--c-success);
+  --color-success-soft: var(--c-success-soft);
+  --color-warning: var(--c-warning);
+  --color-warning-soft: var(--c-warning-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-info: var(--c-info);
+  --color-info-soft: var(--c-info-soft);
+  --color-neutral-soft: var(--c-neutral-soft);
+  --color-nav: var(--c-nav);
+  --color-nav-hover: var(--c-nav-hover);
+  --color-nav-active: var(--c-nav-active);
+  --color-nav-text: var(--c-nav-text);
+  --color-nav-muted: var(--c-nav-muted);
+  --color-focus: var(--c-focus);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+/*
+ * Printed documents (document templates). Paper is always light, whatever the
+ * app theme, so the document tokens are fixed light values.
+ */
+.doc-paper {
+  --doc-ink: #111827;
+  --doc-muted: #5b6474;
+  --doc-line: #c9d0da;
+  --doc-accent: #1d4ed8;
+  --doc-accent-soft: #e8efff;
+  color: var(--doc-ink);
+  background: #ffffff;
+  font-family: var(--font-sans);
+  line-height: 1.35;
+  box-sizing: border-box;
+  color-scheme: light;
+}
+.doc-paper *,
+.doc-paper *::before,
+.doc-paper *::after {
+  border-color: var(--doc-line);
+}
+.doc-accent-primary { --doc-accent: #1d4ed8; --doc-accent-soft: #e8efff; }
+.doc-accent-neutral { --doc-accent: #111827; --doc-accent-soft: #eef1f5; }
+.doc-accent-success { --doc-accent: #15803d; --doc-accent-soft: #e7f6ec; }
+.doc-accent-warning { --doc-accent: #b45309; --doc-accent-soft: #fdf3e2; }
+.doc-accent-danger { --doc-accent: #b91c1c; --doc-accent-soft: #fdecec; }
+.doc-accent-info { --doc-accent: #0e7490; --doc-accent-soft: #e3f5f8; }
+.doc-paper .doc-muted { color: var(--doc-muted); }
+.doc-paper .doc-accent-text { color: var(--doc-accent); }
+.doc-paper .doc-accent-border { border-color: var(--doc-accent); }
+.doc-paper .doc-table th { background: var(--doc-accent-soft); }
+.doc-paper .doc-barcode canvas,
+.doc-paper .doc-barcode img { max-height: 100%; max-width: 100%; margin-left: auto; }
+.doc-page { flex-shrink: 0; overflow: hidden; box-shadow: 0 1px 4px rgb(15 23 42 / 0.18); }
+.print-docs { display: none; }
+.doc-export { position: fixed; left: -100000px; top: 0; }
+
+/* Printing a barcode label prints only the .print-area. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  /* Printed documents: only the page copies, one per sheet. */
+  body.printing-doc > *:not(.print-docs) {
+    display: none !important;
+  }
+  body.printing-doc .print-docs {
+    display: block;
+  }
+  .print-docs,
+  .print-docs * {
+    visibility: visible;
+  }
+  .print-docs .doc-page {
+    box-shadow: none;
+    break-after: page;
+    margin: 0;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: fixed;
+    inset: 0;
+    border: 0 !important;
+  }
+  /* Shipping labels: one label per page, at its template size. */
+  .print-labels,
+  .print-labels * {
+    visibility: visible;
+  }
+  .print-labels {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block !important;
+  }
+  .print-labels .ship-label {
+    break-after: page;
+    border: 0 !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}

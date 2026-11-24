@@ -1,0 +1,16 @@
+{
+  "name": "label-mes",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Label printing Manufacturing ERP (BOM, Planning, Shopfloor, QC) - TBS-aligned",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "npm --workspace web run dev",
+    "dev:server": "npm --workspace server run dev",
+    "build": "npm --workspace server run build && npm --workspace web run build",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck",
+    "test": "npm --workspace server run test",
+    "db:docker:up": "docker compose up -d mysql",
+    "db:docker:down": "docker compose down"
+  }
+}
